@@ -1,0 +1,29 @@
+{
+  "name": "daemon-manager",
+  "version": "1.0.0",
+  "description": "Windows background daemon manager for Node.js and headless processes",
+  "type": "module",
+  "bin": {
+    "daemon": "./dist/cli/index.js"
+  },
+  "main": "./dist/index.js",
+  "scripts": {
+    "build": "tsc",
+    "watch": "tsc --watch",
+    "start": "node dist/cli/index.js",
+    "test": "node --test dist/**/*.test.js"
+  },
+  "keywords": [
+    "daemon",
+    "windows",
+    "service",
+    "process-manager",
+    "background-processes"
+  ],
+  "author": "",
+  "license": "MIT",
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "typescript": "^5.8.0"
+  }
+}
