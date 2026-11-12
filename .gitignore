@@ -2,6 +2,9 @@
 node_modules/
 dist/
 
+# Distribution packages
+*.tgz
+
 # Logs & Runtime
 *.log
 .daemon-manager/
