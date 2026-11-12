@@ -103,3 +103,34 @@ test('DaemonServer exposes authenticated API and endpoints', async () => {
   await server.stop();
   await supervisor.shutdown();
 });
+
+test('ProcessSupervisor executes background commands (isCommand: true)', async () => {
+  const storage = new StorageManager();
+  const supervisor = new ProcessSupervisor(storage);
+
+  await supervisor.init();
+
+  const registered = await supervisor.registerProcess({
+    name: 'test-command',
+    script: 'echo',
+    args: ['Hello from command'],
+    cwd: currentDir,
+    isCommand: true,
+    autoRestart: false,
+  });
+
+  assert.equal(registered.isCommand, true);
+
+  const started = await supervisor.startProcess(registered.id);
+  assert.equal(started.status, 'running');
+
+  // Wait for command output
+  await new Promise((resolve) => setTimeout(resolve, 1000));
+
+  const logs = await supervisor.getLogs(registered.id);
+  assert.ok(logs.out.includes('Hello from command'), 'Command output should be logged');
+
+  await supervisor.stopProcess(registered.id);
+  await supervisor.deleteProcess(registered.id);
+  await supervisor.shutdown();
+});

@@ -30,6 +30,8 @@ interface ManagedProcess {
   restartTimer: NodeJS.Timeout | null;
   logStreamOut: fs.WriteStream | null;
   logStreamErr: fs.WriteStream | null;
+  recentLogsOut: string[];
+  recentLogsErr: string[];
   metrics: ProcessMetrics;
 }
 
@@ -65,6 +67,8 @@ export class ProcessSupervisor extends EventEmitter {
         restartTimer: null,
         logStreamOut: null,
         logStreamErr: null,
+        recentLogsOut: [],
+        recentLogsErr: [],
         metrics: { cpuPercent: 0, memoryRssBytes: 0 },
       });
 
@@ -94,6 +98,7 @@ export class ProcessSupervisor extends EventEmitter {
       script: params.script,
       cwd: params.cwd || process.cwd(),
       args: params.args || [],
+      isCommand: Boolean(params.isCommand),
       env: params.env || captureEnvironment(),
       autoRestart: params.autoRestart !== false,
       maxRestarts: params.maxRestarts ?? 10,
@@ -114,6 +119,8 @@ export class ProcessSupervisor extends EventEmitter {
       restartTimer: null,
       logStreamOut: null,
       logStreamErr: null,
+      recentLogsOut: [],
+      recentLogsErr: [],
       metrics: { cpuPercent: 0, memoryRssBytes: 0 },
     };
 
@@ -163,40 +170,74 @@ export class ProcessSupervisor extends EventEmitter {
     managed.logStreamOut = outStream;
     managed.logStreamErr = errStream;
 
-    const nodeExec = resolveNodeBinary(config.nodePath);
-    const scriptPath = path.isAbsolute(config.script)
-      ? config.script
-      : path.resolve(config.cwd, config.script);
+    let child: ChildProcess;
 
-    const spawnArgs = [scriptPath, ...(config.args || [])];
+    if (config.isCommand) {
+      const fullCmd = [config.script, ...(config.args || [])].join(' ');
+      if (process.platform === 'win32') {
+        child = spawn('cmd.exe', ['/c', fullCmd], {
+          cwd: config.cwd,
+          env: {
+            ...process.env,
+            ...config.env,
+            DAEMON_PROCESS_ID: id,
+            DAEMON_MANAGED: '1',
+          },
+          windowsHide: true,
+          stdio: ['ignore', 'pipe', 'pipe'],
+        });
+      } else {
+        child = spawn('/bin/sh', ['-c', fullCmd], {
+          cwd: config.cwd,
+          env: {
+            ...process.env,
+            ...config.env,
+            DAEMON_PROCESS_ID: id,
+            DAEMON_MANAGED: '1',
+          },
+          detached: true,
+          stdio: ['ignore', 'pipe', 'pipe'],
+        });
+      }
+    } else {
+      const nodeExec = resolveNodeBinary(config.nodePath);
+      const scriptPath = path.isAbsolute(config.script)
+        ? config.script
+        : path.resolve(config.cwd, config.script);
 
-    // Windows Background Flags:
-    // windowsHide: true suppresses console windows
-    // detached: true separates child process from current console session
-    const child = spawn(nodeExec, spawnArgs, {
-      cwd: config.cwd,
-      env: {
-        ...process.env,
-        ...config.env,
-        DAEMON_PROCESS_ID: id,
-        DAEMON_MANAGED: '1',
-      },
-      detached: true,
-      windowsHide: true,
-      stdio: ['ignore', 'pipe', 'pipe'],
-    });
+      const spawnArgs = [scriptPath, ...(config.args || [])];
+
+      child = spawn(nodeExec, spawnArgs, {
+        cwd: config.cwd,
+        env: {
+          ...process.env,
+          ...config.env,
+          DAEMON_PROCESS_ID: id,
+          DAEMON_MANAGED: '1',
+        },
+        detached: true,
+        windowsHide: true,
+        stdio: ['ignore', 'pipe', 'pipe'],
+      });
+    }
 
     if (child.stdout) {
       child.stdout.pipe(outStream);
       child.stdout.on('data', (data) => {
-        this.emit('log', { id, type: 'stdout', text: data.toString('utf8') });
+        const text = data.toString('utf8');
+        managed.recentLogsOut.push(text);
+        if (managed.recentLogsOut.length > 200) managed.recentLogsOut.shift();
+        this.emit('log', { id, type: 'stdout', text });
       });
     }
 
     if (child.stderr) {
       child.stderr.pipe(errStream);
       child.stderr.on('data', (data) => {
-        this.emit('log', { id, type: 'stderr', text: data.toString('utf8') });
+        const text = data.toString('utf8');
+        managed.recentLogsErr.push(text);
+        if (managed.recentLogsErr.length > 200) managed.recentLogsErr.shift();
+        this.emit('log', { id, type: 'stderr', text });
       });
     }
 
@@ -313,6 +354,7 @@ export class ProcessSupervisor extends EventEmitter {
       script: managed.config.script,
       cwd: managed.config.cwd,
       args: managed.config.args || [],
+      isCommand: managed.config.isCommand,
       status: managed.status,
       pid: managed.pid,
       uptimeSeconds,
@@ -333,20 +375,28 @@ export class ProcessSupervisor extends EventEmitter {
     const outPath = path.join(logsDir, `${id}.out.log`);
     const errPath = path.join(logsDir, `${id}.err.log`);
 
-    const readTail = (filePath: string): string => {
+    const managed = this.processes.get(id);
+
+    const readTail = (filePath: string, inMemory: string[]): string => {
       try {
-        if (!fs.existsSync(filePath)) return '';
-        const content = fs.readFileSync(filePath, 'utf8');
+        let content = '';
+        if (fs.existsSync(filePath)) {
+          content = fs.readFileSync(filePath, 'utf8');
+        }
+        if (!content.trim() && inMemory.length > 0) {
+          content = inMemory.join('');
+        }
+        if (!content) return '';
         const lines = content.split('\n');
         return lines.slice(-maxLines).join('\n');
       } catch {
-        return '';
+        return inMemory.join('');
       }
     };
 
     return {
-      out: readTail(outPath),
-      err: readTail(errPath),
+      out: readTail(outPath, managed?.recentLogsOut || []),
+      err: readTail(errPath, managed?.recentLogsErr || []),
     };
   }
 

@@ -91,54 +91,91 @@ async function ensureDaemonRunning(): Promise<void> {
 
 async function handleStart(args: string[]): Promise<void> {
   if (args.length === 0) {
-    console.error('Error: Please provide a script to run. Example: daemon start app.js --name my-api');
+    console.error('Error: Please provide a script or command to run.');
+    console.error('Examples:');
+    console.error('  daemon start app.js --name my-api');
+    console.error('  daemon start npm start --name web');
+    console.error('  daemon start --cmd "npm run dev" --name dev-server');
     process.exit(1);
   }
 
-  let script = '';
   let name = '';
-  const scriptArgs: string[] = [];
+  let isExplicitCommand = false;
+  let explicitCommandStr = '';
+  const positional: string[] = [];
 
   for (let i = 0; i < args.length; i++) {
-    if (args[i] === '--name' && args[i + 1]) {
+    const arg = args[i];
+    if (arg === '--name' && args[i + 1]) {
       name = args[i + 1];
       i++;
-    } else if (!script) {
-      script = args[i];
+    } else if ((arg === '--cmd' || arg === '--command') && args[i + 1]) {
+      isExplicitCommand = true;
+      explicitCommandStr = args[i + 1];
+      i++;
     } else {
-      scriptArgs.push(args[i]);
+      positional.push(arg);
     }
   }
 
-  const absScript = path.resolve(process.cwd(), script);
-  if (!fs.existsSync(absScript)) {
-    console.error(`Error: Target script not found: ${absScript}`);
-    process.exit(1);
-  }
+  let isCommand = isExplicitCommand;
+  let target = '';
+  let commandArgs: string[] = [];
 
-  if (!name) {
-    name = path.basename(script, path.extname(script));
+  if (isExplicitCommand) {
+    const parts = explicitCommandStr.trim().split(/\s+/);
+    target = parts[0];
+    commandArgs = parts.slice(1);
+    if (!name) {
+      name = parts.join('-');
+    }
+  } else if (positional.length > 0) {
+    const firstArg = positional[0];
+    const candidatePath = path.resolve(process.cwd(), firstArg);
+
+    // If candidate path exists as a file on disk, treat as script file
+    if (fs.existsSync(candidatePath) && fs.statSync(candidatePath).isFile()) {
+      target = candidatePath;
+      commandArgs = positional.slice(1);
+      isCommand = false;
+      if (!name) {
+        name = path.basename(firstArg, path.extname(firstArg));
+      }
+    } else {
+      // It's a command (e.g. "npm start", "pnpm dev", "yarn build")
+      isCommand = true;
+      target = firstArg;
+      commandArgs = positional.slice(1);
+      if (!name) {
+        name = [firstArg, ...commandArgs].join('-');
+      }
+    }
+  } else {
+    console.error('Error: No script or command specified.');
+    process.exit(1);
   }
 
   await ensureDaemonRunning();
 
   const payload = {
     name,
-    script: absScript,
+    script: target,
     cwd: process.cwd(),
-    args: scriptArgs,
+    args: commandArgs,
+    isCommand,
   };
 
   const res = await callApi('/api/processes', 'POST', payload);
   if (res.success) {
     const p: ProcessRuntime = res.data;
-    console.log(`[+] Background process '${p.name}' started successfully.`);
-    console.log(`    ID:     ${p.id}`);
-    console.log(`    PID:    ${p.pid}`);
-    console.log(`    Status: ${p.status}`);
-    console.log(`    Logs:   ${p.logPathOut}`);
+    console.log(`[+] Background ${isCommand ? 'command' : 'script'} '${p.name}' started successfully.`);
+    console.log(`    ID:      ${p.id}`);
+    console.log(`    Command: ${[p.script, ...(p.args || [])].join(' ')}`);
+    console.log(`    PID:     ${p.pid}`);
+    console.log(`    Status:  ${p.status}`);
+    console.log(`    Logs:    ${p.logPathOut}`);
   } else {
-    console.error(`[-] Failed to start process: ${res.error}`);
+    console.error(`[-] Failed to start: ${res.error}`);
     process.exit(1);
   }
 }
@@ -330,14 +367,22 @@ function printHelp(): void {
 Windows Daemon Manager - Process Management CLI
 
 Usage:
-  daemon start <script> [--name <name>]   Start a process in the background
-  daemon list (or ls, status)             List all managed processes
-  daemon stop <id|name>                   Stop a running process
-  daemon restart <id|name>                Restart a process
-  daemon delete <id|name>                 Delete a process definition
-  daemon logs <id|name>                   View process stdout & stderr logs
-  daemon ui                               Launch the Web Dashboard in browser
-  daemon service <cmd>                    Manage Windows boot service (install/uninstall/status)
+  daemon start <script|command> [args...] [--name <name>]   Start a script or command in background
+  daemon start npm start [--name <name>]                    Run npm / pnpm / yarn commands
+  daemon start --cmd "<command>" [--name <name>]            Explicit command string
+  daemon list (or ls, status)                               List all managed processes
+  daemon stop <id|name>                                     Stop a running process
+  daemon restart <id|name>                                  Restart a process
+  daemon delete <id|name>                                   Delete a process definition
+  daemon logs <id|name>                                     View process stdout & stderr logs
+  daemon ui                                                 Launch the Web Dashboard in browser
+  daemon service <cmd>                                      Manage Windows boot service (install/uninstall/status)
+
+Examples:
+  daemon start server.js --name api
+  daemon start npm start --name web-frontend
+  daemon start pnpm run dev --name dev-server
+  daemon start python worker.py --name data-sync
 `);
 }
 

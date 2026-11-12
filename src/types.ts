@@ -12,6 +12,7 @@ export interface ProcessConfig {
   script: string;
   cwd: string;
   args?: string[];
+  isCommand?: boolean;
   env?: Record<string, string>;
   autoRestart?: boolean;
   maxRestarts?: number;
@@ -31,6 +32,7 @@ export interface ProcessRuntime {
   script: string;
   cwd: string;
   args: string[];
+  isCommand?: boolean;
   status: ProcessStatus;
   pid: number | null;
   uptimeSeconds: number;

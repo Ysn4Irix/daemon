@@ -361,7 +361,7 @@ export function getDashboardHtml(): string {
           <tr>
             <td>
               <strong>\${escapeHtml(p.name)}</strong>
-              <div style="font-size: 0.75rem; color: var(--text-muted); font-family: var(--font-mono)">\${escapeHtml(p.script)}</div>
+              <div style="font-size: 0.75rem; color: var(--text-muted); font-family: var(--font-mono)">\${escapeHtml([p.script, ...(p.args || [])].join(' '))}</div>
             </td>
             <td><span class="status-badge \${statusClass}">\${p.status}</span></td>
             <td class="mono">\${p.pid || '-'}</td>

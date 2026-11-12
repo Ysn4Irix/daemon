@@ -38,11 +38,21 @@ npm link
 
 ## CLI Usage
 
-### 1. Start a Process in the Background
+### 1. Start a Script or Command in the Background
 ```bash
+# Start a Node.js script
 daemon start server.js --name my-api
+
+# Start package manager commands
+daemon start npm start --name web-frontend
+daemon start pnpm run dev --name dev-server
+daemon start yarn start --name app
+
+# Start arbitrary commands
+daemon start python worker.py --name sync-job
+daemon start --cmd "npm run build --watch" --name builder
 ```
-*Launches `server.js` detached with a hidden console window. The supervisor auto-starts in the background if not already running.*
+*Launches scripts or commands with a hidden console window and zero UI interruptions. The supervisor auto-starts in the background if not already running.*
 
 ### 2. List All Managed Processes
 ```bash
