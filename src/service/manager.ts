@@ -1,10 +1,10 @@
-import { exec } from 'node:child_process';
+import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import path from 'node:path';
 import fs from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
-const execAsync = promisify(exec);
+const execFileAsync = promisify(execFile);
 
 const TASK_NAME = 'WindowsDaemonManager';
 
@@ -31,8 +31,11 @@ export class ServiceManager {
 
     try {
       // Create scheduled task to run at system startup with highest privileges
-      const taskCmd = `schtasks /Create /TN "${TASK_NAME}" /TR "${command}" /SC ONSTART /RU "SYSTEM" /RL HIGHEST /F`;
-      await execAsync(taskCmd);
+      await execFileAsync(
+        'schtasks.exe',
+        ['/Create', '/TN', TASK_NAME, '/TR', command, '/SC', 'ONSTART', '/RU', 'SYSTEM', '/RL', 'HIGHEST', '/F'],
+        { windowsHide: true }
+      );
 
       return {
         success: true,
@@ -63,7 +66,9 @@ export class ServiceManager {
       // Stop if currently running
       await this.stop();
       // Delete task
-      await execAsync(`schtasks /Delete /TN "${TASK_NAME}" /F`);
+      await execFileAsync('schtasks.exe', ['/Delete', '/TN', TASK_NAME, '/F'], {
+        windowsHide: true,
+      });
       return { success: true, message: `Service '${TASK_NAME}' has been removed.` };
     } catch (error: any) {
       if (error?.message?.includes('not find the file') || error?.code === 1) {
@@ -82,7 +87,9 @@ export class ServiceManager {
     }
 
     try {
-      await execAsync(`schtasks /Run /TN "${TASK_NAME}"`);
+      await execFileAsync('schtasks.exe', ['/Run', '/TN', TASK_NAME], {
+        windowsHide: true,
+      });
       return { success: true, message: `Service '${TASK_NAME}' started.` };
     } catch (error: any) {
       return { success: false, message: error?.message || 'Failed to start service' };
@@ -98,7 +105,9 @@ export class ServiceManager {
     }
 
     try {
-      await execAsync(`schtasks /End /TN "${TASK_NAME}"`);
+      await execFileAsync('schtasks.exe', ['/End', '/TN', TASK_NAME], {
+        windowsHide: true,
+      });
       return { success: true, message: `Service '${TASK_NAME}' stopped.` };
     } catch (error: any) {
       return { success: false, message: error?.message || 'Failed to stop service' };
@@ -114,7 +123,11 @@ export class ServiceManager {
     }
 
     try {
-      const { stdout } = await execAsync(`schtasks /Query /TN "${TASK_NAME}" /FO CSV /NH`);
+      const { stdout } = await execFileAsync(
+        'schtasks.exe',
+        ['/Query', '/TN', TASK_NAME, '/FO', 'CSV', '/NH'],
+        { windowsHide: true }
+      );
       const isRunning = stdout.includes('Running');
       return { installed: true, running: isRunning, rawStatus: stdout.trim() };
     } catch {

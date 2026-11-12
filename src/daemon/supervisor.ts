@@ -173,32 +173,19 @@ export class ProcessSupervisor extends EventEmitter {
     let child: ChildProcess;
 
     if (config.isCommand) {
-      const fullCmd = [config.script, ...(config.args || [])].join(' ');
-      if (process.platform === 'win32') {
-        child = spawn('cmd.exe', ['/c', fullCmd], {
-          cwd: config.cwd,
-          env: {
-            ...process.env,
-            ...config.env,
-            DAEMON_PROCESS_ID: id,
-            DAEMON_MANAGED: '1',
-          },
-          windowsHide: true,
-          stdio: ['ignore', 'pipe', 'pipe'],
-        });
-      } else {
-        child = spawn('/bin/sh', ['-c', fullCmd], {
-          cwd: config.cwd,
-          env: {
-            ...process.env,
-            ...config.env,
-            DAEMON_PROCESS_ID: id,
-            DAEMON_MANAGED: '1',
-          },
-          detached: true,
-          stdio: ['ignore', 'pipe', 'pipe'],
-        });
-      }
+      const resolved = this.resolveCommand(config);
+      child = spawn(resolved.binary, resolved.args, {
+        cwd: config.cwd,
+        env: {
+          ...process.env,
+          ...config.env,
+          DAEMON_PROCESS_ID: id,
+          DAEMON_MANAGED: '1',
+        },
+        detached: true,
+        windowsHide: true,
+        stdio: ['ignore', 'pipe', 'pipe'],
+      });
     } else {
       const nodeExec = resolveNodeBinary(config.nodePath);
       const scriptPath = path.isAbsolute(config.script)
@@ -401,6 +388,63 @@ export class ProcessSupervisor extends EventEmitter {
   }
 
   /**
+   * Resolves a command configuration to an optimal executable and arguments.
+   * On Windows, maps npm, npx, pnpm, and yarn directly to their Node entrypoint scripts
+   * to eliminate batch-file console windows completely.
+   */
+  private resolveCommand(config: ProcessConfig): { binary: string; args: string[] } {
+    if (process.platform === 'win32') {
+      const nodeExec = resolveNodeBinary(config.nodePath);
+      const nodeDir = path.dirname(nodeExec);
+      const scriptBase = path.basename(config.script).toLowerCase().replace(/\.(cmd|bat|exe)$/, '');
+
+      // Check for npm
+      if (scriptBase === 'npm') {
+        const npmCli = path.join(nodeDir, 'node_modules', 'npm', 'bin', 'npm-cli.js');
+        if (fs.existsSync(npmCli)) {
+          return { binary: nodeExec, args: [npmCli, ...(config.args || [])] };
+        }
+      }
+
+      // Check for npx
+      if (scriptBase === 'npx') {
+        const npxCli = path.join(nodeDir, 'node_modules', 'npm', 'bin', 'npx-cli.js');
+        if (fs.existsSync(npxCli)) {
+          return { binary: nodeExec, args: [npxCli, ...(config.args || [])] };
+        }
+      }
+
+      // Check for pnpm
+      if (scriptBase === 'pnpm') {
+        const pnpmMjs = path.join(nodeDir, 'node_modules', 'pnpm', 'bin', 'pnpm.mjs');
+        if (fs.existsSync(pnpmMjs)) {
+          return { binary: nodeExec, args: [pnpmMjs, ...(config.args || [])] };
+        }
+        const pnpmCjs = path.join(nodeDir, 'node_modules', 'pnpm', 'bin', 'pnpm.cjs');
+        if (fs.existsSync(pnpmCjs)) {
+          return { binary: nodeExec, args: [pnpmCjs, ...(config.args || [])] };
+        }
+      }
+
+      // Check for yarn
+      if (scriptBase === 'yarn') {
+        const yarnJs = path.join(nodeDir, 'node_modules', 'yarn', 'bin', 'yarn.js');
+        if (fs.existsSync(yarnJs)) {
+          return { binary: nodeExec, args: [yarnJs, ...(config.args || [])] };
+        }
+      }
+
+      // For generic commands on Windows: spawn cmd.exe with detached and windowsHide
+      const fullCmd = [config.script, ...(config.args || [])].join(' ');
+      return { binary: 'cmd.exe', args: ['/c', fullCmd] };
+    }
+
+    // Non-Windows: run via standard shell
+    const fullCmd = [config.script, ...(config.args || [])].join(' ');
+    return { binary: '/bin/sh', args: ['-c', fullCmd] };
+  }
+
+  /**
    * Internal exit handler managing crash detection and auto-restarts.
    */
   private handleProcessExit(
@@ -416,7 +460,14 @@ export class ProcessSupervisor extends EventEmitter {
     managed.pid = null;
     managed.lastExitCode = code;
     managed.lastExitTime = new Date().toISOString();
+
+    const uptimeMs = managed.startTime ? Date.now() - managed.startTime : 0;
     managed.startTime = null;
+
+    // Reset restart counter if process was running stably for >= 15 seconds
+    if (uptimeMs >= 15000) {
+      managed.restarts = 0;
+    }
 
     // If stopped intentionally, do not auto-restart
     if (managed.status === 'stopping' || managed.status === 'stopped') {
@@ -425,7 +476,14 @@ export class ProcessSupervisor extends EventEmitter {
       return;
     }
 
-    // Unexpected exit
+    // Clean exit with code 0 (e.g. short-lived command or normal completion)
+    if (code === 0 && signal === null) {
+      managed.status = 'stopped';
+      this.emit('status-change', { id, status: managed.status, code });
+      return;
+    }
+
+    // Unexpected exit or crash
     const config = managed.config;
     if (config.autoRestart !== false) {
       managed.restarts += 1;

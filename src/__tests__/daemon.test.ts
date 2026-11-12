@@ -124,13 +124,48 @@ test('ProcessSupervisor executes background commands (isCommand: true)', async (
   const started = await supervisor.startProcess(registered.id);
   assert.equal(started.status, 'running');
 
-  // Wait for command output
-  await new Promise((resolve) => setTimeout(resolve, 1000));
+  // Wait for command output and natural exit
+  await new Promise((resolve) => setTimeout(resolve, 1500));
 
   const logs = await supervisor.getLogs(registered.id);
   assert.ok(logs.out.includes('Hello from command'), 'Command output should be logged');
 
-  await supervisor.stopProcess(registered.id);
+  // Verify command with code 0 transitions cleanly to stopped instead of looping restarts
+  const runtime = supervisor.getRuntime(registered.id);
+  assert.equal(runtime?.status, 'stopped');
+
+  await supervisor.deleteProcess(registered.id);
+  await supervisor.shutdown();
+});
+
+test('ProcessSupervisor resolves npm and command runners directly', async () => {
+  const storage = new StorageManager();
+  const supervisor = new ProcessSupervisor(storage);
+  await supervisor.init();
+
+  const registered = await supervisor.registerProcess({
+    name: 'npm-resolver-test',
+    script: 'npm',
+    args: ['-v'],
+    cwd: currentDir,
+    isCommand: true,
+    autoRestart: true,
+  });
+
+  const started = await supervisor.startProcess(registered.id);
+  assert.ok(started.pid !== null);
+
+  // Wait for execution
+  await new Promise((resolve) => setTimeout(resolve, 2000));
+
+  const runtime = supervisor.getRuntime(registered.id);
+  // Because npm -v exits with 0, it should be cleanly stopped, not restarting
+  assert.equal(runtime?.status, 'stopped');
+  assert.equal(runtime?.restarts, 0);
+
+  const logs = await supervisor.getLogs(registered.id);
+  assert.ok(logs.out.trim().length > 0, 'npm -v should produce version output');
+
   await supervisor.deleteProcess(registered.id);
   await supervisor.shutdown();
 });

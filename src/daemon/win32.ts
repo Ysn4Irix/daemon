@@ -1,21 +1,21 @@
-import { exec, execFile } from 'node:child_process';
+import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import fs from 'node:fs';
 
-const execAsync = promisify(exec);
 const execFileAsync = promisify(execFile);
 
 /**
  * Forcefully terminates a process and all its child processes (process tree) on Windows.
- * Uses native taskkill /PID <pid> /T /F
+ * Uses native taskkill.exe /PID <pid> /T /F with windowsHide: true to prevent console flashing.
  */
 export async function terminateProcessTree(pid: number): Promise<boolean> {
   if (!pid || pid <= 0) return true;
 
   try {
-    // Check if running on Windows
     if (process.platform === 'win32') {
-      await execAsync(`taskkill /PID ${pid} /T /F`);
+      await execFileAsync('taskkill.exe', ['/PID', pid.toString(), '/T', '/F'], {
+        windowsHide: true,
+      });
     } else {
       process.kill(pid, 'SIGKILL');
     }
@@ -52,6 +52,7 @@ export function isProcessAlive(pid: number): boolean {
 
 /**
  * Fetches approximate resource metrics for a process.
+ * Uses direct execFile with windowsHide: true to ensure zero console window popup.
  */
 export async function getProcessMetrics(
   pid: number
@@ -63,9 +64,10 @@ export async function getProcessMetrics(
   try {
     if (process.platform === 'win32') {
       // tasklist returns CSV: "Image Name","PID","Session Name","Session#","Mem Usage"
-      // e.g. "node.exe","12345","Console","1","45,232 K"
-      const { stdout } = await execAsync(
-        `tasklist /FI "PID eq ${pid}" /FO CSV /NH`
+      const { stdout } = await execFileAsync(
+        'tasklist.exe',
+        ['/FI', `PID eq ${pid}`, '/FO', 'CSV', '/NH'],
+        { windowsHide: true }
       );
       if (!stdout || !stdout.includes(`"${pid}"`)) {
         return { cpuPercent: 0, memoryRssBytes: 0 };
